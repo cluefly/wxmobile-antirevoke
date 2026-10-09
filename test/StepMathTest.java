@@ -5,7 +5,12 @@ public final class StepMathTest {
         check(StepMath.applyOffset(12967f, 100, false) == 12967f, "disabled");
         check(StepMath.applyOffset(12967f, 0, true) == 12967f, "zero");
         check(StepMath.applyOffset(12967f, 100, true) == 13067f, "add");
-        check(StepMath.applyOffset(10f, -50, true) == 0f, "clamp");
+        check(StepMath.applyOffset(10f, -50, true) == 10f, "refuse negative");
+        check(StepMath.nonDecreasingGoal(3000, 1000) == 3000, "keep credited");
+        check(StepMath.nonDecreasingGoal(3000, 8000) == 8000, "raise goal");
+        check(StepMath.nonDecreasingGoal(3000, -5) == 3000, "refuse negative goal");
+        check(StepMath.nextRelease(100, -50, 0) == 0, "no negative release");
+        check(StepMath.allowedBoost(100f, -20, 18000) == 0, "no negative boost");
         check(StepMath.applyOffset(13049f, 500, true) == 13549f, "minute");
         check(StepMath.isMinutePedometer(33171034, "other"), "type");
         check(StepMath.isMinutePedometer(1, "qti.sensor.pedometer_minute"), "name");

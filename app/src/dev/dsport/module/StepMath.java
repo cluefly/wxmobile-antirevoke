@@ -99,12 +99,24 @@ public final class StepMath {
                 STEPS_PER_MINUTE, STEPS_PER_FIVE_MINUTES);
     }
 
+    /**
+     * Stored target after a save. A negative request is refused by callers;
+     * a request below steps already credited stays at the credited total.
+     */
+    public static long nonDecreasingGoal(long credited, long requested) {
+        long done = Math.max(0L, credited);
+        if (requested < 0L) {
+            return done;
+        }
+        return Math.max(requested, done);
+    }
+
     public static long nextRelease(long credited, long offset, long releasedInFiveMinutes,
             long perMinute, long perFive) {
-        if (offset <= 0L || credited >= offset || perMinute <= 0L) {
+        if (offset <= 0L || credited < 0L || credited >= offset || perMinute <= 0L) {
             return 0L;
         }
-        long remain = offset - Math.max(0L, credited);
+        long remain = offset - credited;
         long windowRoom = acceptableFive(perFive) - Math.max(0L, releasedInFiveMinutes);
         if (remain <= 0L || windowRoom <= 0L) {
             return 0L;
@@ -117,6 +129,7 @@ public final class StepMath {
      * A raw count already at the cap receives nothing.
      */
     public static long allowedBoost(float raw, long credited, long cap) {
+        // Negative credit would subtract steps. Refuse it.
         if (credited <= 0L) {
             return 0L;
         }
@@ -146,7 +159,7 @@ public final class StepMath {
     }
 
     public static float applyOffset(float raw, long offset, boolean enabled) {
-        if (!enabled || offset == 0L) {
+        if (!enabled || offset <= 0L) {
             return raw;
         }
         double value = (double) raw + (double) offset;

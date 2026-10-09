@@ -1,7 +1,7 @@
 #!/system/bin/sh
-ui_print "- DSport 0.1"
+ui_print "- DSport 0.2"
 ui_print "- 主界面显示 step_counter、step_detector、pedometer_minute"
-ui_print "- 偏移加到计步器和分钟计步的累计值上"
+ui_print "- 只增加 step_counter 的累计值，不减少。分钟计步和步数检测不修改"
 if [ -f "$MODPATH/dsport.apk" ]; then
   pm install -r -g "$MODPATH/dsport.apk"
   if [ "$?" -eq 0 ]; then

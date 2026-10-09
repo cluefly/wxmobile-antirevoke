@@ -29,6 +29,9 @@ final class SensorDispatch {
     private static volatile long stepsPerMinute = StepMath.STEPS_PER_MINUTE;
     private static volatile long stepsPerFive = StepMath.STEPS_PER_FIVE_MINUTES;
     private static volatile long stepCap = StepMath.DEFAULT_STEP_CAP;
+    private static final Object STATE = new Object();
+    private static boolean configLogged;
+    private static boolean resolveLogged;
     private static long lastCreditMinute = Long.MIN_VALUE;
     private static final int WINDOW = 8;
     private static final long[] creditMinute = new long[WINDOW];
@@ -65,9 +68,7 @@ final class SensorDispatch {
                 considerAdvance(raw0);
             }
             long boost = 0L;
-            if (enabled && offset < 0L) {
-                boost = offset;
-            } else if (credited > 0L) {
+            if (offset > 0L && credited > 0L) {
                 boost = StepMath.allowedBoost(raw0, credited, stepCap);
             }
             mod0 = StepMath.applyOffset(raw0, boost, boost != 0L);
@@ -95,7 +96,10 @@ final class SensorDispatch {
                 return (Sensor) sensor;
             }
         } catch (Throwable error) {
-            XposedBridge.log(error);
+            if (!resolveLogged) {
+                resolveLogged = true;
+                XposedBridge.log(error);
+            }
         }
         return null;
     }
@@ -112,29 +116,47 @@ final class SensorDispatch {
         try {
             Bundle bundle = context.getContentResolver().call(CONFIG, "getConfig", null, null);
             if (bundle == null) {
+                configReadAt = now;
                 return;
             }
-            enabled = bundle.getBoolean("enabled", false);
-            offset = bundle.getLong("offset", 0L);
+            long remoteOffset = bundle.getLong("offset", 0L);
+            if (remoteOffset < 0L) {
+                remoteOffset = 0L;
+            }
             long remoteCredited = bundle.getLong("credited", 0L);
-            if (remoteCredited > credited) {
-                credited = remoteCredited;
+            if (remoteCredited < 0L) {
+                remoteCredited = 0L;
             }
             long minuteCap = bundle.getLong("perMinute", StepMath.STEPS_PER_MINUTE);
             long fiveCap = bundle.getLong("perFive", StepMath.STEPS_PER_FIVE_MINUTES);
-            if (minuteCap > 0L) {
-                stepsPerMinute = minuteCap;
-            }
-            if (fiveCap > 1L) {
-                stepsPerFive = fiveCap;
-            }
             long cap = bundle.getLong("stepCap", StepMath.DEFAULT_STEP_CAP);
-            if (cap > 0L) {
-                stepCap = cap;
+            synchronized (STATE) {
+                enabled = bundle.getBoolean("enabled", false);
+                offset = remoteOffset;
+                if (remoteCredited > credited) {
+                    credited = remoteCredited;
+                }
+                if (credited < 0L) {
+                    credited = 0L;
+                }
+                if (minuteCap > 0L) {
+                    stepsPerMinute = minuteCap;
+                }
+                if (fiveCap > 1L) {
+                    stepsPerFive = fiveCap;
+                }
+                if (cap > 0L) {
+                    stepCap = cap;
+                }
             }
             configReadAt = now;
+            configLogged = false;
         } catch (Throwable error) {
-            XposedBridge.log(error);
+            configReadAt = now;
+            if (!configLogged) {
+                configLogged = true;
+                XposedBridge.log(error);
+            }
         }
     }
 
@@ -144,41 +166,48 @@ final class SensorDispatch {
      * and drops a jump that reaches {@link StepMath#STEPS_PER_FIVE_MINUTES} in five minutes.
      */
     private static void considerAdvance(float raw) {
-        if (offset <= 0L || credited >= offset) {
-            return;
-        }
-        long room = StepMath.releaseRoom(raw, credited, stepCap);
-        if (room <= 0L) {
-            if (!"1".equals(System.getProperty("dsport.capped"))) {
-                System.setProperty("dsport.capped", "1");
-                XposedBridge.log("DSport: cap " + stepCap + " raw " + raw
-                        + " credited " + credited + " refuse");
+        synchronized (STATE) {
+            if (offset <= 0L || credited < 0L || credited >= offset) {
+                return;
             }
-            return;
+            long room = StepMath.releaseRoom(raw, credited, stepCap);
+            if (room <= 0L) {
+                if (!"1".equals(System.getProperty("dsport.capped"))) {
+                    System.setProperty("dsport.capped", "1");
+                    XposedBridge.log("DSport: cap " + stepCap + " raw " + raw
+                            + " credited " + credited + " refuse");
+                }
+                return;
+            }
+            long wallMinute = System.currentTimeMillis() / 60_000L;
+            if (wallMinute == lastCreditMinute) {
+                return;
+            }
+            long already = releasedInWindow(wallMinute);
+            long release = StepMath.nextRelease(credited, offset, already, stepsPerMinute, stepsPerFive);
+            if (release <= 0L) {
+                lastCreditMinute = wallMinute;
+                return;
+            }
+            if (release > room) {
+                release = room;
+            }
+            lastCreditMinute = wallMinute;
+            long before = credited;
+            long next = pushCredited(before + release);
+            if (next < before) {
+                next = before;
+            }
+            credited = next;
+            long added = credited - before;
+            if (added > 0L) {
+                rememberRelease(wallMinute, added);
+            }
+            configReadAt = SystemClock.elapsedRealtime();
+            XposedBridge.log("DSport: credit " + credited + "/" + offset + " +" + added
+                    + " minute " + stepsPerMinute
+                    + " five " + stepsPerFive);
         }
-        long wallMinute = System.currentTimeMillis() / 60_000L;
-        if (wallMinute == lastCreditMinute) {
-            return;
-        }
-        long already = releasedInWindow(wallMinute);
-        long release = StepMath.nextRelease(credited, offset, already, stepsPerMinute, stepsPerFive);
-        if (release > room) {
-            release = room;
-        }
-        lastCreditMinute = wallMinute;
-        if (release <= 0L) {
-            return;
-        }
-        long before = credited;
-        credited = pushCredited(before + release);
-        long added = credited - before;
-        if (added > 0L) {
-            rememberRelease(wallMinute, added);
-        }
-        configReadAt = SystemClock.elapsedRealtime();
-        XposedBridge.log("DSport: credit " + credited + "/" + offset + " +" + added
-                + " minute " + stepsPerMinute
-                + " five " + stepsPerFive);
     }
 
     private static long releasedInWindow(long wallMinute) {
@@ -229,8 +258,7 @@ final class SensorDispatch {
             float mod1) {
         int slot = slotOf(key);
         long now = SystemClock.elapsedRealtime();
-        boolean changed = slot < 0 || lastRaw[slot] != raw0;
-        if (!changed && slot >= 0 && now - lastReportAt[slot] < REPORT_TTL_MS) {
+        if (slot >= 0 && now - lastReportAt[slot] < REPORT_TTL_MS) {
             return;
         }
         if (slot >= 0) {

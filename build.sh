@@ -47,8 +47,8 @@ aapt2 link -o "$WORK/linked.apk" \
   -R "$WORK/res.zip" \
   --min-sdk-version 29 \
   --target-sdk-version 34 \
-  --version-code 1 \
-  --version-name 0.1 \
+  --version-code 2 \
+  --version-name 0.2 \
   --auto-add-overlay
 
 echo "javac"
@@ -95,12 +95,12 @@ cp "$ROOT/module/module.prop" "$ROOT/module/customize.sh" "$ROOT/module/boot-com
 cp "$OUT/dsport.apk" "$OUT/module/dsport.apk"
 chmod 755 "$OUT/module/customize.sh" "$OUT/module/boot-completed.sh" \
   "$OUT/module/action.sh" "$OUT/module/uninstall.sh"
-rm -f "$OUT/dsport-0.1.zip"
+rm -f "$OUT/dsport-0.1.zip" "$OUT/dsport-0.2.zip"
 python3 - "$OUT" <<'PY'
 import os, sys, zipfile
 out = sys.argv[1]
 src = os.path.join(out, "module")
-with zipfile.ZipFile(os.path.join(out, "dsport-0.1.zip"), "w") as z:
+with zipfile.ZipFile(os.path.join(out, "dsport-0.2.zip"), "w") as z:
     for name in sorted(os.listdir(src)):
         path = os.path.join(src, name)
         info = zipfile.ZipInfo(name)
@@ -110,4 +110,4 @@ with zipfile.ZipFile(os.path.join(out, "dsport-0.1.zip"), "w") as z:
             z.writestr(info, handle.read())
 PY
 echo "built $OUT/dsport.apk"
-echo "built $OUT/dsport-0.1.zip"
+echo "built $OUT/dsport-0.2.zip"

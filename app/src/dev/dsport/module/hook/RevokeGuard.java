@@ -12,9 +12,13 @@ import android.widget.Toast;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
@@ -57,6 +61,7 @@ public final class RevokeGuard {
             "com.tencent.mm.kiss.widget.textview.PLSysTextView"
     };
     private static final Set<Class<?>> hooked = Collections.newSetFromMap(new IdentityHashMap<>());
+    private static final Set<String> loggedMiss = ConcurrentHashMap.newKeySet();
     private static final Map<Long, String> goodText = new ConcurrentHashMap<>();
     private static final Map<Long, Long> heldAt = new ConcurrentHashMap<>();
     private static final ThreadLocal<Boolean> busy = new ThreadLocal<>();
@@ -68,7 +73,8 @@ public final class RevokeGuard {
     private static final AtomicInteger tipNotes = new AtomicInteger();
 
     private static volatile boolean watching;
-    private static volatile boolean wantOn = true;
+    private static volatile boolean wantOn;
+    private static volatile boolean versionLogged;
     private static volatile long configReadAt;
 
     private RevokeGuard() {}
@@ -79,38 +85,53 @@ public final class RevokeGuard {
         retryLater();
     }
 
+    /** New Tinker dex loaders only. ClassLoader.loadClass stays unhooked. */
     private static void watchLoaders() {
         if (watching) {
             return;
         }
         watching = true;
         try {
-            Method load = ClassLoader.class.getDeclaredMethod("loadClass", String.class, boolean.class);
-            XposedBridge.hookMethod(load, new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) {
-                    if (Boolean.TRUE.equals(busy.get()) || param.args == null || param.args.length == 0) {
-                        return;
+            Class<?> base = Class.forName("dalvik.system.BaseDexClassLoader");
+            Constructor<?>[] ctors = base.getDeclaredConstructors();
+            for (int i = 0; i < ctors.length; i++) {
+                XposedBridge.hookMethod(ctors[i], new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        if (!(param.thisObject instanceof ClassLoader) || !tinkerLoader(param)) {
+                            return;
+                        }
+                        hookNames((ClassLoader) param.thisObject);
                     }
-                    if (!(param.args[0] instanceof String) || !watched((String) param.args[0])) {
-                        return;
-                    }
-                    if (param.getResult() instanceof Class) {
-                        hookType((Class<?>) param.getResult());
-                    }
-                }
-            });
+                });
+            }
         } catch (Throwable error) {
             XposedBridge.log("DSport: anti-revoke skip loader " + error.getClass().getSimpleName());
         }
+    }
+
+    private static boolean tinkerLoader(XC_MethodHook.MethodHookParam param) {
+        if (param.args != null) {
+            for (int i = 0; i < param.args.length; i++) {
+                if (param.args[i] instanceof String
+                        && ((String) param.args[i]).toLowerCase(Locale.US).contains("tinker")) {
+                    return true;
+                }
+            }
+        }
+        String text = param.thisObject.toString().toLowerCase(Locale.US);
+        return text.contains("tinker");
     }
 
     private static void retryLater() {
         Thread thread = new Thread(() -> {
             try {
                 Thread.sleep(2000L);
+                logVersion();
                 hookNames(appLoader());
                 Thread.sleep(6000L);
+                hookNames(appLoader());
+                Thread.sleep(7000L);
                 hookNames(appLoader());
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
@@ -118,6 +139,30 @@ public final class RevokeGuard {
         }, "dsport-revoke");
         thread.setDaemon(true);
         thread.start();
+    }
+
+    private static void logVersion() {
+        if (versionLogged) {
+            return;
+        }
+        Context context = currentApplication();
+        if (context == null) {
+            return;
+        }
+        versionLogged = true;
+        try {
+            String version = context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), 0).versionName;
+            XposedBridge.log("DSport: anti-revoke wechat " + version + ", symbols for 8.0.78");
+        } catch (Throwable error) {
+            XposedBridge.log("DSport: anti-revoke wechat version unknown");
+        }
+    }
+
+    private static void logMiss(String name) {
+        if (loggedMiss.add(name)) {
+            XposedBridge.log("DSport: anti-revoke miss " + name);
+        }
     }
 
     private static boolean watched(String name) {
@@ -139,8 +184,7 @@ public final class RevokeGuard {
                 try {
                     hookType(Class.forName(name, false, loader));
                 } catch (Throwable error) {
-                    XposedBridge.log("DSport: anti-revoke miss " + name + " "
-                            + error.getClass().getSimpleName());
+                    logMiss(name);
                 }
             }
         } finally {
@@ -233,10 +277,14 @@ public final class RevokeGuard {
         hook(find(type, "u3", 1, String.class), new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
-                if (selfPath() || !keepMessage(param.thisObject)) {
+                if (!keepMessage(param.thisObject)) {
                     return;
                 }
-                if (!recentlyHeld(messageId(param.thisObject)) && !recallText(param.args)) {
+                boolean held = recentlyHeld(messageId(param.thisObject));
+                if (!held && !recallText(param.args)) {
+                    return;
+                }
+                if (selfSent() || param.args == null || param.args.length == 0) {
                     return;
                 }
                 param.args[0] = XposedHelpers.getObjectField(param.thisObject, "x0");
@@ -249,6 +297,9 @@ public final class RevokeGuard {
         hook(find(type, "setType", 1, int.class), new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
+                if (param.args == null || param.args.length == 0 || !(param.args[0] instanceof Integer)) {
+                    return;
+                }
                 int next = ((Integer) param.args[0]).intValue();
                 long id = messageId(param.thisObject);
                 boolean recallFlag = revokeType(next);
@@ -256,7 +307,7 @@ public final class RevokeGuard {
                 if (!recallFlag && !plainRecall) {
                     return;
                 }
-                if (selfPath() || !keepMessage(param.thisObject)) {
+                if (!keepMessage(param.thisObject) || selfSent()) {
                     return;
                 }
                 Object current = XposedHelpers.callMethod(param.thisObject, "getType");
@@ -286,7 +337,7 @@ public final class RevokeGuard {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
                 Object row = param.args[1];
-                if (!recentlyHeld(messageId(row)) || selfPath()) {
+                if (!recentlyHeld(messageId(row)) || selfSent()) {
                     return;
                 }
                 Object typeValue = XposedHelpers.callMethod(row, "getType");
@@ -316,7 +367,7 @@ public final class RevokeGuard {
                 }
                 Object message = eventMessage(param.thisObject);
                 long id = messageId(message);
-                if (!recentlyHeld(id) || selfPath()) {
+                if (!recentlyHeld(id) || selfSent()) {
                     return;
                 }
                 param.setResult(Boolean.FALSE);
@@ -335,7 +386,7 @@ public final class RevokeGuard {
 
     /** Saves the text still on the message before a recall notice replaces it. */
     private static void remember(Object message) {
-        if (!readWant() || selfPath() || sent(message) || officialTalker(message)) {
+        if (!readWant() || selfSent() || sent(message) || officialTalker(message)) {
             return;
         }
         long id = messageId(message);
@@ -346,10 +397,7 @@ public final class RevokeGuard {
         if (!(current instanceof String) || ((String) current).isEmpty() || recallText(current)) {
             return;
         }
-        if (goodText.size() > 500) {
-            goodText.clear();
-        }
-        goodText.put(id, (String) current);
+        storeGoodText(id, (String) current);
     }
 
     private static void restoreRecallText(Object message) {
@@ -359,7 +407,7 @@ public final class RevokeGuard {
             return;
         }
         Object current = XposedHelpers.callMethod(message, "j");
-        if (!(current instanceof String) || !recallText(current) || saved.equals(current) || selfPath()) {
+        if (!(current instanceof String) || !recallText(current) || saved.equals(current) || selfSent()) {
             return;
         }
         String notice = (String) current;
@@ -425,7 +473,7 @@ public final class RevokeGuard {
 
     /** WeChat draws system tips with SysTextView and ignores TextView.setTextColor. */
     private static void hookSysText(Class<?> type) {
-        hook(findTextMethod(type, "setText"), new XC_MethodHook() {
+        XC_MethodHook textHook = new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
                 if (!(param.thisObject instanceof TextView)) {
@@ -441,8 +489,8 @@ public final class RevokeGuard {
                     restoreTip(view);
                 }
             }
-        });
-        hook(findTextMethod(type, "setTextColor"), new XC_MethodHook() {
+        };
+        XC_MethodHook colorHook = new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
                 if (Boolean.TRUE.equals(painting.get()) || !(param.thisObject instanceof TextView)) {
@@ -458,23 +506,20 @@ public final class RevokeGuard {
                 }
                 param.args[0] = Integer.valueOf(tipColor(view));
             }
-        });
-    }
-
-    private static Method findTextMethod(Class<?> type, String name) {
+        };
         for (Method method : type.getDeclaredMethods()) {
             Class<?>[] params = method.getParameterTypes();
-            if (!name.equals(method.getName()) || params.length == 0) {
+            if (params.length == 0) {
                 continue;
             }
-            if ("setText".equals(name) && params.length == 2 && params[0] == CharSequence.class) {
-                return method;
-            }
-            if ("setTextColor".equals(name) && params.length == 1 && params[0] == int.class) {
-                return method;
+            if ("setText".equals(method.getName()) && params[0] == CharSequence.class
+                    && (params.length == 1 || params.length == 2)) {
+                hook(method, textHook);
+            } else if ("setTextColor".equals(method.getName()) && params.length == 1
+                    && params[0] == int.class) {
+                hook(method, colorHook);
             }
         }
-        return null;
     }
 
     private static void paintTip(TextView view) {
@@ -616,6 +661,37 @@ public final class RevokeGuard {
         return System.currentTimeMillis();
     }
 
+    /** Drops text that is no longer in a live recall. A full clear would lose the row being restored. */
+    private static void storeGoodText(long id, String text) {
+        if (goodText.size() >= 500 && !goodText.containsKey(id)) {
+            long now = SystemClock.elapsedRealtime();
+            Iterator<Map.Entry<Long, Long>> held = heldAt.entrySet().iterator();
+            while (held.hasNext()) {
+                Map.Entry<Long, Long> entry = held.next();
+                if (now - entry.getValue().longValue() > HELD_MS) {
+                    held.remove();
+                }
+            }
+            goodText.entrySet().removeIf(entry -> !heldAt.containsKey(entry.getKey()));
+            if (goodText.size() >= 450) {
+                Long[] ids = heldAt.keySet().toArray(new Long[0]);
+                Arrays.sort(ids, (left, right) -> Long.compare(
+                        heldAt.getOrDefault(left, 0L), heldAt.getOrDefault(right, 0L)));
+                int extra = goodText.size() - 400;
+                for (int i = 0; i < ids.length && extra > 0; i++) {
+                    if (ids[i].longValue() == id) {
+                        continue;
+                    }
+                    if (goodText.remove(ids[i]) != null) {
+                        extra--;
+                    }
+                    heldAt.remove(ids[i]);
+                }
+            }
+        }
+        goodText.put(id, text);
+    }
+
     private static void mark(Object message) {
         long id = messageId(message);
         if (id > 0L) {
@@ -651,11 +727,11 @@ public final class RevokeGuard {
         return type == TYPE_REVOKE || type == TYPE_REVOKE_APP || type == TYPE_REVOKE_MEDIA;
     }
 
-    private static boolean selfPath() {
+    /** A recall this phone sent. An open chat on the stack is not enough. */
+    private static boolean selfSent() {
         StackTraceElement[] stack = Thread.currentThread().getStackTrace();
         for (int i = 0; i < stack.length; i++) {
-            String name = stack[i].getClassName();
-            if (name.startsWith("com.tencent.mm.modelsimple.d1") || name.contains("ui.chatting")) {
+            if (stack[i].getClassName().startsWith("com.tencent.mm.modelsimple.d1")) {
                 return true;
             }
         }
@@ -723,7 +799,7 @@ public final class RevokeGuard {
             }
             return method;
         }
-        XposedBridge.log("DSport: anti-revoke miss " + type.getName() + "." + name);
+        logMiss(type.getName() + "." + name);
         return null;
     }
 
@@ -755,10 +831,11 @@ public final class RevokeGuard {
         try {
             Bundle bundle = context.getContentResolver().call(CONFIG, "getConfig", null, null);
             if (bundle != null && bundle.containsKey("antiRevoke")) {
-                wantOn = bundle.getBoolean("antiRevoke", true);
+                wantOn = bundle.getBoolean("antiRevoke", false);
             }
             configReadAt = now;
         } catch (Throwable error) {
+            configReadAt = now;
             XposedBridge.log("DSport: anti-revoke config " + error.getClass().getSimpleName());
         }
         return wantOn;

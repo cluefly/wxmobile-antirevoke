@@ -27,11 +27,13 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class MainActivity extends android.app.Activity {
     private static final int REQ_PERMISSION = 1;
     private static final long MAX_OFFSET = 100_000_000L;
     private static final long MAX_RATE = 1_000_000L;
+    private static final long SU_WAIT_MS = 8_000L;
 
     private final SimpleDateFormat clock = new SimpleDateFormat("HH:mm:ss", Locale.CHINA);
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -245,10 +247,13 @@ public final class MainActivity extends android.app.Activity {
         String done = start ? "已启动微信" : "已停止微信";
         new Thread(() -> {
             String message = done;
+            Process process = null;
             try {
-                Process process = new ProcessBuilder("/system/bin/su", "-c", command)
+                process = new ProcessBuilder("/system/bin/su", "-c", command)
                         .redirectErrorStream(true)
                         .start();
+                AtomicBoolean timedOut = new AtomicBoolean();
+                Thread watch = armTimeout(process, timedOut);
                 ByteArrayOutputStream captured = new ByteArrayOutputStream();
                 InputStream stream = process.getInputStream();
                 byte[] buffer = new byte[256];
@@ -257,12 +262,19 @@ public final class MainActivity extends android.app.Activity {
                     captured.write(buffer, 0, read);
                 }
                 int code = process.waitFor();
-                if (code != 0) {
+                watch.interrupt();
+                if (timedOut.get()) {
+                    message = "操作超时";
+                } else if (code != 0) {
                     String detail = captured.toString(StandardCharsets.UTF_8).trim();
                     message = detail.isEmpty() ? "需要在 APatch 里允许 DSport 使用 root" : detail;
                 }
             } catch (Throwable error) {
                 message = "需要在 APatch 里允许 DSport 使用 root";
+            } finally {
+                if (process != null) {
+                    process.destroy();
+                }
             }
             String toast = message;
             handler.post(() -> Toast.makeText(getApplicationContext(), toast, Toast.LENGTH_SHORT).show());
@@ -350,6 +362,8 @@ public final class MainActivity extends android.app.Activity {
         try {
             process = new ProcessBuilder("/system/bin/su", "-M", "-c",
                     "cp /data/user/0/com.tencent.mm/files/mmkv/SportKv /dev/stdout").start();
+            AtomicBoolean timedOut = new AtomicBoolean();
+            Thread watch = armTimeout(process, timedOut);
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
             ByteArrayOutputStream errors = new ByteArrayOutputStream();
             InputStream input = process.getInputStream();
@@ -363,6 +377,10 @@ public final class MainActivity extends android.app.Activity {
                 errors.write(chunk, 0, n);
             }
             int code = process.waitFor();
+            watch.interrupt();
+            if (timedOut.get()) {
+                return new SportRead(null, "读取超时");
+            }
             if (code != 0 || buffer.size() == 0) {
                 String why = new String(errors.toByteArray(), StandardCharsets.UTF_8).trim();
                 if (why.isEmpty()) {
@@ -457,8 +475,12 @@ public final class MainActivity extends android.app.Activity {
 
     private void save(View view) {
         Long offset = parseOffset(offsetInput.getText().toString());
-        if (offset == null || offset > MAX_OFFSET || offset < -MAX_OFFSET) {
-            Toast.makeText(this, "偏移要是整数，范围 ±100000000", Toast.LENGTH_SHORT).show();
+        if (offset == null || offset > MAX_OFFSET) {
+            Toast.makeText(this, "步数要是 0 到 100000000 的整数", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (offset < 0L) {
+            Toast.makeText(this, "不能填负数，步数只增不减", Toast.LENGTH_SHORT).show();
             return;
         }
         Long perMinute = parseWhole(perMinuteInput.getText().toString());
@@ -473,13 +495,18 @@ public final class MainActivity extends android.app.Activity {
             return;
         }
         if (enabledSwitch.isChecked()) {
-            ConfigStore.putAbsolute(this, offset, perMinute, perFive, stepCap);
-            Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show();
-        } else {
-            if (offset < 0L) {
-                Toast.makeText(this, "关闭开关时，输入的是再增加的步数，不能为负数", Toast.LENGTH_SHORT).show();
+            long stored = ConfigStore.putAbsolute(this, offset, perMinute, perFive, stepCap);
+            if (stored < 0L) {
+                Toast.makeText(this, "不能填负数，步数只增不减", Toast.LENGTH_SHORT).show();
                 return;
             }
+            if (stored != offset) {
+                offsetInput.setText(Long.toString(stored));
+                Toast.makeText(this, "已计入的步数不会减少，目标保持为 " + stored, Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show();
+            }
+        } else {
             ConfigStore.Config current = ConfigStore.get(this);
             StepMath.AdditionGoal addition = StepMath.additionGoal(
                     current.credited, current.base, current.goal, current.enabled, offset);
@@ -514,16 +541,16 @@ public final class MainActivity extends android.app.Activity {
             previewLine.setText("步数还不是整数。");
             return;
         }
+        if (offset < 0L) {
+            previewLine.setText("不能填负数，步数只增不减。");
+            return;
+        }
         if (!validRates(perMinute, perFive) || !validCap(stepCap)) {
             previewLine.setText("每分钟、每 5 分钟或步数上限还不是可用的整数。");
             return;
         }
         String capNote = "送出累计达到 " + stepCap + " 后不再增加。";
         if (!enabledSwitch.isChecked()) {
-            if (offset < 0L) {
-                previewLine.setText("关闭开关时，输入的是再增加的步数，不能为负数。已加上的步数保留。");
-                return;
-            }
             ConfigStore.Config current = ConfigStore.get(this);
             StepMath.AdditionGoal addition = StepMath.additionGoal(
                     current.credited, current.base, current.goal, current.enabled, offset);
@@ -533,9 +560,31 @@ public final class MainActivity extends android.app.Activity {
                     + StepMath.acceptableFive(perFive) + " 步。已加上的步数保留。" + capNote);
             return;
         }
+        ConfigStore.Config current = ConfigStore.get(this);
+        long goal = StepMath.nonDecreasingGoal(current.credited, offset);
+        if (goal != offset) {
+            previewLine.setText("已计入 " + current.credited + "，目标不能再降低，将保持 "
+                    + goal + "。已加上的步数不会减少。" + capNote);
+            return;
+        }
         previewLine.setText("step_counter 累计值每分钟最多加 " + perMinute
                 + " 步，每 5 分钟最多 " + StepMath.acceptableFive(perFive)
                 + " 步，直到加满 " + offset + "。" + capNote);
+    }
+
+    private static Thread armTimeout(Process process, AtomicBoolean timedOut) {
+        Thread watch = new Thread(() -> {
+            try {
+                Thread.sleep(SU_WAIT_MS);
+                timedOut.set(true);
+                process.destroyForcibly();
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }, "dsport-su-timeout");
+        watch.setDaemon(true);
+        watch.start();
+        return watch;
     }
 
     private static boolean validCap(Long stepCap) {

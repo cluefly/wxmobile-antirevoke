@@ -50,11 +50,25 @@ public final class HookStatus {
                 extras.getFloat("mod1", Float.NaN),
                 extras.getBoolean("modified", false),
                 extras.getLong("time", 0L));
-        SAMPLES.put(sensor, sample);
+        String pkg = sample.pkg == null ? "" : sample.pkg;
+        SAMPLES.put(sensor + "\n" + pkg, sample);
     }
 
+    /** Prefer the process that releases credit. WeChat and the step service no longer overwrite each other. */
     public static Sample get(String sensor) {
-        return SAMPLES.get(sensor);
+        Sample fallback = null;
+        for (Sample sample : SAMPLES.values()) {
+            if (!sensor.equals(sample.sensor)) {
+                continue;
+            }
+            if (StepMath.releasesCredit(sample.pkg)) {
+                return sample;
+            }
+            if (fallback == null) {
+                fallback = sample;
+            }
+        }
+        return fallback;
     }
 
     public static Bundle snapshot() {
@@ -68,7 +82,8 @@ public final class HookStatus {
             one.putFloat("mod1", sample.mod1);
             one.putBoolean("modified", sample.modified);
             one.putLong("time", sample.time);
-            out.putBundle(sample.sensor, one);
+            String pkg = sample.pkg == null ? "" : sample.pkg;
+            out.putBundle(sample.sensor + "/" + pkg, one);
         }
         return out;
     }

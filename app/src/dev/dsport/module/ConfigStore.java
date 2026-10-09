@@ -60,16 +60,33 @@ public final class ConfigStore {
         if (stepCap <= 0L) {
             stepCap = StepMath.DEFAULT_STEP_CAP;
         }
+        long[] totals = forwardTotals(prefs.getLong(KEY_OFFSET, 0L), prefs.getLong(KEY_CREDITED, 0L));
+        long base = prefs.getLong(KEY_BASE, 0L);
+        long addition = prefs.getLong(KEY_ADDITION, 0L);
+        if (base < 0L) {
+            base = 0L;
+        }
+        if (addition < 0L) {
+            addition = 0L;
+        }
         return new Config(
                 prefs.getBoolean(KEY_ENABLED, false),
-                prefs.getLong(KEY_OFFSET, 0L),
-                prefs.getLong(KEY_CREDITED, 0L),
-                prefs.getLong(KEY_BASE, 0L),
-                prefs.getLong(KEY_ADDITION, 0L),
+                totals[0],
+                totals[1],
+                base,
+                addition,
                 perMinute,
                 perFive,
                 stepCap,
-                prefs.getBoolean(KEY_ANTI_REVOKE, true));
+                prefs.getBoolean(KEY_ANTI_REVOKE, false));
+    }
+
+    /** Goal and credited shown to the UI and the hook. Neither is negative, and the goal is not below credited. */
+    private static long[] forwardTotals(long goal, long credited) {
+        if (credited < 0L) {
+            credited = 0L;
+        }
+        return new long[] {StepMath.nonDecreasingGoal(credited, goal), credited};
     }
 
     /** Leaves the step offset and the release caps untouched. */
@@ -80,17 +97,25 @@ public final class ConfigStore {
                 .commit();
     }
 
-    /** Switch on: {@code goal} is the absolute target. A lower goal pulls credited down. */
-    public static void putAbsolute(Context context, long goal, long perMinute, long perFive,
+    /**
+     * Switch on: {@code goal} is the absolute target.
+     * Returns the goal written, or -1 when {@code goal} is negative.
+     * A goal below steps already credited is raised to that total. Credited never decreases.
+     */
+    public static long putAbsolute(Context context, long goal, long perMinute, long perFive,
             long stepCap) {
+        if (goal < 0L) {
+            return -1L;
+        }
         SharedPreferences prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE);
         long credited = prefs.getLong(KEY_CREDITED, 0L);
-        if (credited > goal) {
-            credited = Math.max(0L, goal);
+        if (credited < 0L) {
+            credited = 0L;
         }
+        long storedGoal = StepMath.nonDecreasingGoal(credited, goal);
         prefs.edit()
                 .putBoolean(KEY_ENABLED, true)
-                .putLong(KEY_OFFSET, goal)
+                .putLong(KEY_OFFSET, storedGoal)
                 .putLong(KEY_CREDITED, credited)
                 .putLong(KEY_BASE, 0L)
                 .putLong(KEY_ADDITION, 0L)
@@ -98,6 +123,7 @@ public final class ConfigStore {
                 .putLong(KEY_PER_FIVE, perFive)
                 .putLong(KEY_STEP_CAP, stepCap)
                 .commit();
+        return storedGoal;
     }
 
     /**
@@ -106,10 +132,25 @@ public final class ConfigStore {
      */
     public static void putAddition(Context context, long base, long addition, long goal,
             long perMinute, long perFive, long stepCap) {
+        if (base < 0L) {
+            base = 0L;
+        }
+        if (addition < 0L) {
+            addition = 0L;
+        }
+        if (goal < 0L) {
+            goal = 0L;
+        }
         SharedPreferences prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE);
+        long credited = prefs.getLong(KEY_CREDITED, 0L);
+        if (credited < 0L) {
+            credited = 0L;
+        }
+        goal = StepMath.nonDecreasingGoal(credited, goal);
         prefs.edit()
                 .putBoolean(KEY_ENABLED, false)
                 .putLong(KEY_OFFSET, goal)
+                .putLong(KEY_CREDITED, credited)
                 .putLong(KEY_BASE, base)
                 .putLong(KEY_ADDITION, addition)
                 .putLong(KEY_PER_MINUTE, perMinute)
@@ -132,7 +173,13 @@ public final class ConfigStore {
         SharedPreferences prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE);
         long offset = prefs.getLong(KEY_OFFSET, 0L);
         long current = prefs.getLong(KEY_CREDITED, 0L);
-        long next = Math.max(current, Math.min(offset, Math.max(0L, credited)));
+        if (current < 0L) {
+            current = 0L;
+        }
+        if (offset < 0L || credited < 0L) {
+            return current;
+        }
+        long next = Math.max(current, Math.min(offset, credited));
         prefs.edit().putLong(KEY_CREDITED, next).commit();
         return next;
     }

@@ -26,12 +26,12 @@
     <string name="hook_initial">系统服务侧：还没有回调</string>
     <string name="time_initial">收到时间 —</string>
     <string name="edit_title">修改累计步数</string>
-    <string name="edit_body">只改 step_counter 的累计值。开关打开时，输入的是累计目标。开关关闭再保存时，输入的是在已计入步数上再增加的数量，按同样的每分钟、每 5 分钟规则继续加，已经加上的步数保留。步数上限默认 18000，送出的累计值达到上限后不再增加。到达每 5 分钟那个数时微信会丢掉这一截，所以实际停在它减 1。</string>
+    <string name="edit_body">只改 step_counter 的累计值。步数只增不减，不能填负数。开关打开时，输入的是累计目标；低于已计入的数字不会把步数减回去。开关关闭再保存时，输入的是在已计入步数上再增加的数量，按同样的每分钟、每 5 分钟规则继续加，已经加上的步数保留。步数上限默认 18000，送出的累计值达到上限后不再增加。到达每 5 分钟那个数时微信会丢掉这一截，所以实际停在它减 1。</string>
     <string name="step_cap_hint">步数上限</string>
     <string name="rate_minute_hint">每分钟上限</string>
     <string name="rate_five_hint">每 5 分钟上限</string>
     <string name="switch_label">启用累计值偏移</string>
-    <string name="offset_hint">目标累计步数，可为负数</string>
+    <string name="offset_hint">目标累计步数，不能为负数</string>
     <string name="offset_add_hint">在已计入步数上再增加</string>
     <string name="save">保存</string>
 </resources>

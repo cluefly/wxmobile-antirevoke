@@ -21,6 +21,9 @@ public final class ConfigProvider extends ContentProvider {
             return null;
         }
         if ("getConfig".equals(method)) {
+            if (!canRead()) {
+                return null;
+            }
             ConfigStore.Config config = ConfigStore.get(getContext());
             Bundle out = new Bundle();
             out.putBoolean("enabled", config.enabled);
@@ -39,6 +42,9 @@ public final class ConfigProvider extends ContentProvider {
                 return null;
             }
             long requested = extras == null ? 0L : extras.getLong("credited", 0L);
+            if (requested < 0L) {
+                return null;
+            }
             long credited = ConfigStore.creditAtLeast(getContext(), requested);
             Bundle out = new Bundle();
             out.putLong("credited", credited);
@@ -51,6 +57,9 @@ public final class ConfigProvider extends ContentProvider {
             ConfigStore.Config current = ConfigStore.get(getContext());
             boolean enabled = extras != null && extras.getBoolean("enabled", false);
             long offset = extras == null ? 0L : extras.getLong("offset", 0L);
+            if (offset < 0L) {
+                return null;
+            }
             long perMinute = current.perMinute;
             long perFive = current.perFive;
             if (extras != null && extras.containsKey("perMinute")) {
@@ -64,7 +73,11 @@ public final class ConfigProvider extends ContentProvider {
                 stepCap = extras.getLong("stepCap", stepCap);
             }
             if (enabled) {
-                ConfigStore.putAbsolute(getContext(), offset, perMinute, perFive, stepCap);
+                long stored = ConfigStore.putAbsolute(getContext(), offset, perMinute, perFive, stepCap);
+                if (stored < 0L) {
+                    return null;
+                }
+                offset = stored;
             } else {
                 ConfigStore.Config fresh = ConfigStore.get(getContext());
                 StepMath.AdditionGoal addition = StepMath.additionGoal(
@@ -80,13 +93,30 @@ public final class ConfigProvider extends ContentProvider {
             return out;
         }
         if ("report".equals(method)) {
+            if (!canRead()) {
+                return null;
+            }
             HookStatus.update(extras);
             return new Bundle();
         }
         if ("getStatus".equals(method)) {
+            if (!canRead()) {
+                return null;
+            }
             return HookStatus.snapshot();
         }
         return null;
+    }
+
+    /** Hooked packages may read. Other apps may not. */
+    private boolean canRead() {
+        int uid = Binder.getCallingUid();
+        if (uid == android.os.Process.myUid() || uid == 0 || uid == 2000
+                || uid == android.os.Process.SYSTEM_UID) {
+            return true;
+        }
+        return uidHasPackage(uid, "com.oplus.exsystemservice", "com.oplus.healthservice",
+                "com.tencent.mm");
     }
 
     /** The hook reads config as whatever app it is injected into. Writes stay local. */
@@ -98,7 +128,26 @@ public final class ConfigProvider extends ContentProvider {
     /** The step service runs as system uid and has to record how much was dripped. */
     private boolean canCredit() {
         int uid = Binder.getCallingUid();
-        return canWrite() || uid == android.os.Process.SYSTEM_UID;
+        return canWrite() || uid == android.os.Process.SYSTEM_UID
+                || uidHasPackage(uid, "com.oplus.exsystemservice", "com.oplus.healthservice");
+    }
+
+    private boolean uidHasPackage(int uid, String... names) {
+        if (getContext() == null) {
+            return false;
+        }
+        String[] pkgs = getContext().getPackageManager().getPackagesForUid(uid);
+        if (pkgs == null) {
+            return false;
+        }
+        for (int i = 0; i < pkgs.length; i++) {
+            for (int j = 0; j < names.length; j++) {
+                if (names[j].equals(pkgs[i])) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     @Override
