@@ -1,0 +1,6 @@
+id=dsport
+name=DSport
+version=0.1
+versionCode=1
+author=jsheng
+description=读取计步器、步数检测和厂商分钟计步。按每分钟 300、每 5 分钟 1500 的上限修改系统计步服务和微信的 step_counter 累计值。需要 Vector。
