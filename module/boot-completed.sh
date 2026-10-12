@@ -1,7 +1,7 @@
 #!/system/bin/sh
 MODDIR=${0%/*}
-APK="$MODDIR/dsport.apk"
-LOGDIR=/data/adb/dsport
+APK="$MODDIR/AntiRevoke.apk"
+LOGDIR=/data/adb/wx_antirevoke
 LOG="$LOGDIR/install.log"
 mkdir -p "$LOGDIR"
 if [ ! -f "$APK" ]; then

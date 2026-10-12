@@ -1,11 +1,19 @@
 #!/bin/sh
-# Builds the DSport APK and the APatch module zip.
-# JDK and the Android SDK live under $HOME/.local so later builds can reuse them.
+# Builds the AntiRevoke APK and the APatch/Magisk module zip.
+# JDK and the Android SDK can be specified via JAVA_HOME and ANDROID_SDK / ANDROID_HOME.
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
-JAVA_HOME="${JAVA_HOME:-$HOME/.local/jdk/temurin-17}"
-ANDROID_SDK="${ANDROID_SDK:-$HOME/.local/android-sdk}"
+JAVA_HOME="${JAVA_HOME:-$HOME/.local/jdk}"
+if [ ! -d "$JAVA_HOME" ] && [ -d "$HOME/.local/jdk/temurin-17" ]; then
+  JAVA_HOME="$HOME/.local/jdk/temurin-17"
+fi
+
+ANDROID_SDK="${ANDROID_SDK:-${ANDROID_HOME:-$HOME/.local/android-sdk}}"
+if [ ! -d "$ANDROID_SDK" ] && [ -d "$HOME/Android/Sdk" ]; then
+  ANDROID_SDK="$HOME/Android/Sdk"
+fi
+
 BUILD_TOOLS="$ANDROID_SDK/build-tools/34.0.0"
 ANDROID_JAR="$ANDROID_SDK/platforms/android-34/android.jar"
 OUT="$ROOT/dist"
@@ -24,14 +32,7 @@ export JAVA_HOME
 export PATH="$JAVA_HOME/bin:$BUILD_TOOLS:$PATH"
 
 rm -rf "$WORK"
-mkdir -p "$WORK/classes" "$WORK/gen" "$WORK/test" "$WORK/dex" "$OUT/module"
-
-echo "test StepMath"
-javac --release 11 -encoding UTF-8 -d "$WORK/test" \
-  "$ROOT/app/src/dev/dsport/module/StepMath.java" \
-  "$ROOT/app/src/dev/dsport/module/WeChatSportConfig.java" \
-  "$ROOT/test/StepMathTest.java"
-java -cp "$WORK/test" dev.dsport.module.StepMathTest
+mkdir -p "$WORK/classes" "$WORK/gen" "$WORK/dex" "$OUT/module"
 
 echo "xposed stubs"
 mkdir -p "$WORK/stubs"
@@ -47,8 +48,8 @@ aapt2 link -o "$WORK/linked.apk" \
   -R "$WORK/res.zip" \
   --min-sdk-version 29 \
   --target-sdk-version 34 \
-  --version-code 2 \
-  --version-name 0.2 \
+  --version-code 3 \
+  --version-name 0.3 \
   --auto-add-overlay
 
 echo "javac"
@@ -56,7 +57,7 @@ find "$ROOT/app/src" "$WORK/gen" -name '*.java' > "$WORK/sources.list"
 javac --release 11 -encoding UTF-8 \
   -classpath "$ANDROID_JAR:$WORK/xposed-stubs.jar" \
   -d "$WORK/classes" \
-  @"$WORK/sources.list"
+  @"${WORK}/sources.list"
 
 echo "dex"
 d8 --min-api 29 --lib "$ANDROID_JAR" --output "$WORK/dex" \
@@ -74,33 +75,36 @@ with zipfile.ZipFile(f"{work}/unsigned.apk", "a") as apk:
 PY
 
 zipalign -f -p 4 "$WORK/unsigned.apk" "$WORK/aligned.apk"
-if [ ! -f "$HOME/.local/android-sdk/dsport-debug.keystore" ]; then
-  keytool -genkeypair -keystore "$HOME/.local/android-sdk/dsport-debug.keystore" \
-    -storepass android -alias dsport -keypass android \
+KEYSTORE_DIR="$OUT/keystore"
+KEYSTORE="$KEYSTORE_DIR/wx-debug.keystore"
+if [ ! -f "$KEYSTORE" ]; then
+  mkdir -p "$KEYSTORE_DIR"
+  keytool -genkeypair -keystore "$KEYSTORE" \
+    -storepass android -alias wx -keypass android \
     -keyalg RSA -keysize 2048 -validity 10000 \
-    -dname "CN=DSport,O=local,C=CN"
+    -dname "CN=WX,O=local,C=CN"
 fi
 apksigner sign \
-  --ks "$HOME/.local/android-sdk/dsport-debug.keystore" \
+  --ks "$KEYSTORE" \
   --ks-pass pass:android \
   --key-pass pass:android \
-  --out "$OUT/dsport.apk" \
+  --out "$OUT/AntiRevoke.apk" \
   "$WORK/aligned.apk"
-apksigner verify "$OUT/dsport.apk"
+apksigner verify "$OUT/AntiRevoke.apk"
 
 echo "module zip"
 cp "$ROOT/module/module.prop" "$ROOT/module/customize.sh" "$ROOT/module/boot-completed.sh" \
   "$ROOT/module/action.sh" "$ROOT/module/uninstall.sh" "$ROOT/module/skip_mount" \
   "$OUT/module/"
-cp "$OUT/dsport.apk" "$OUT/module/dsport.apk"
+cp "$OUT/AntiRevoke.apk" "$OUT/module/AntiRevoke.apk"
 chmod 755 "$OUT/module/customize.sh" "$OUT/module/boot-completed.sh" \
   "$OUT/module/action.sh" "$OUT/module/uninstall.sh"
-rm -f "$OUT/dsport-0.1.zip" "$OUT/dsport-0.2.zip"
+rm -f "$OUT/wx-antirevoke-*.zip"
 python3 - "$OUT" <<'PY'
 import os, sys, zipfile
 out = sys.argv[1]
 src = os.path.join(out, "module")
-with zipfile.ZipFile(os.path.join(out, "dsport-0.2.zip"), "w") as z:
+with zipfile.ZipFile(os.path.join(out, "wx-antirevoke-0.3.zip"), "w") as z:
     for name in sorted(os.listdir(src)):
         path = os.path.join(src, name)
         info = zipfile.ZipInfo(name)
@@ -109,5 +113,5 @@ with zipfile.ZipFile(os.path.join(out, "dsport-0.2.zip"), "w") as z:
         with open(path, "rb") as handle:
             z.writestr(info, handle.read())
 PY
-echo "built $OUT/dsport.apk"
-echo "built $OUT/dsport-0.2.zip"
+echo "built $OUT/AntiRevoke.apk"
+echo "built $OUT/wx-antirevoke-0.3.zip"

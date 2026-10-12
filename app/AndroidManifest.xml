@@ -1,13 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="dev.dsport.module"
-    android:versionCode="2"
-    android:versionName="0.2">
+    package="wx.module"
+    android:versionCode="3"
+    android:versionName="0.3">
 
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="34" />
-    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
-    <uses-feature android:name="android.hardware.sensor.stepcounter" android:required="false" />
-    <uses-feature android:name="android.hardware.sensor.stepdetector" android:required="false" />
 
     <application
         android:allowBackup="false"
@@ -16,7 +13,7 @@
         android:theme="@style/AppTheme">
 
         <meta-data android:name="xposedmodule" android:value="true" />
-        <meta-data android:name="xposeddescription" android:value="读取并按偏移修改计步累计值。本界面显示原始传感器。" />
+        <meta-data android:name="xposeddescription" android:value="微信消息防撤回模块" />
         <meta-data android:name="xposedminversion" android:value="93" />
         <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
 
@@ -31,7 +28,7 @@
 
         <provider
             android:name=".ConfigProvider"
-            android:authorities="dev.dsport.module.config"
+            android:authorities="wx.module.config"
             android:exported="true" />
     </application>
 </manifest>

@@ -1,4 +1,4 @@
-package dev.dsport.module.hook;
+package wx.module.hook;
 
 import android.content.Context;
 import android.content.res.Configuration;
@@ -39,7 +39,7 @@ import de.robv.android.xposed.XposedHelpers;
  * red system line under it, using WeChat's own type-10000 insert.
  */
 public final class RevokeGuard {
-    private static final Uri CONFIG = Uri.parse("content://dev.dsport.module.config");
+    private static final Uri CONFIG = Uri.parse("content://wx.module.config");
     private static final long CONFIG_TTL_MS = 1000L;
     private static final long HELD_MS = 10_000L;
     private static final int TYPE_REVOKE = 0x10002710;
@@ -106,7 +106,7 @@ public final class RevokeGuard {
                 });
             }
         } catch (Throwable error) {
-            XposedBridge.log("DSport: anti-revoke skip loader " + error.getClass().getSimpleName());
+            XposedBridge.log("WX: anti-revoke skip loader " + error.getClass().getSimpleName());
         }
     }
 
@@ -136,7 +136,7 @@ public final class RevokeGuard {
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }
-        }, "dsport-revoke");
+        }, "wx-revoke");
         thread.setDaemon(true);
         thread.start();
     }
@@ -153,15 +153,15 @@ public final class RevokeGuard {
         try {
             String version = context.getPackageManager()
                     .getPackageInfo(context.getPackageName(), 0).versionName;
-            XposedBridge.log("DSport: anti-revoke wechat " + version + ", symbols for 8.0.78");
+            XposedBridge.log("WX: anti-revoke wechat " + version + ", symbols for 8.0.78");
         } catch (Throwable error) {
-            XposedBridge.log("DSport: anti-revoke wechat version unknown");
+            XposedBridge.log("WX: anti-revoke wechat version unknown");
         }
     }
 
     private static void logMiss(String name) {
         if (loggedMiss.add(name)) {
-            XposedBridge.log("DSport: anti-revoke miss " + name);
+            XposedBridge.log("WX: anti-revoke miss " + name);
         }
     }
 
@@ -205,7 +205,7 @@ public final class RevokeGuard {
         try {
             ClassLoader loader = type.getClassLoader();
             String loaderName = loader == null ? "boot" : loader.getClass().getSimpleName();
-            XposedBridge.log("DSport: anti-revoke class " + type.getName() + " " + loaderName);
+            XposedBridge.log("WX: anti-revoke class " + type.getName() + " " + loaderName);
             switch (type.getName()) {
                 case "b41.t":
                     hookConsumer(type);
@@ -243,14 +243,14 @@ public final class RevokeGuard {
                 if (!readWant() || officialSession(param.args)) {
                     return;
                 }
-                XposedBridge.log("DSport: anti-revoke keep");
+                XposedBridge.log("WX: anti-revoke keep");
             }
         });
         hook(parser, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
                 if (param.args != null && param.args.length > 0 && "revokemsg".equals(param.args[0])) {
-                    XposedBridge.log("DSport: anti-revoke xml");
+                    XposedBridge.log("WX: anti-revoke xml");
                 }
             }
         });
@@ -460,11 +460,11 @@ public final class RevokeGuard {
             XposedHelpers.callMethod(tip, "b1", text);
             Object row = XposedHelpers.callMethod(storage, "yb", tip);
             if (tipNotes.incrementAndGet() <= 20) {
-                XposedBridge.log("DSport: anti-revoke tip " + row);
+                XposedBridge.log("WX: anti-revoke tip " + row);
             }
             toast(text);
         } catch (Throwable error) {
-            XposedBridge.log("DSport: anti-revoke tip " + error.getClass().getSimpleName()
+            XposedBridge.log("WX: anti-revoke tip " + error.getClass().getSimpleName()
                     + " " + error.getMessage());
         } finally {
             inserting.remove();
@@ -605,7 +605,7 @@ public final class RevokeGuard {
         if (context == null || id <= 0L) {
             return false;
         }
-        File dir = new File(context.getFilesDir(), "dsport-revoke");
+        File dir = new File(context.getFilesDir(), "wx-revoke");
         if (!dir.isDirectory() && !dir.mkdirs()) {
             return false;
         }
@@ -698,7 +698,7 @@ public final class RevokeGuard {
             heldAt.put(id, SystemClock.elapsedRealtime());
         }
         if (notes.incrementAndGet() <= 20) {
-            XposedBridge.log("DSport: anti-revoke held");
+            XposedBridge.log("WX: anti-revoke held");
         }
     }
 
@@ -836,7 +836,7 @@ public final class RevokeGuard {
             configReadAt = now;
         } catch (Throwable error) {
             configReadAt = now;
-            XposedBridge.log("DSport: anti-revoke config " + error.getClass().getSimpleName());
+            XposedBridge.log("WX: anti-revoke config " + error.getClass().getSimpleName());
         }
         return wantOn;
     }
